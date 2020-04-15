@@ -18,6 +18,7 @@
 package org.apache.spark.sql.streaming
 
 import java.util.Locale
+import java.util.concurrent.TimeoutException
 
 import scala.collection.JavaConverters._
 
@@ -25,14 +26,13 @@ import org.apache.spark.annotation.Evolving
 import org.apache.spark.api.java.function.VoidFunction2
 import org.apache.spark.sql._
 import org.apache.spark.sql.catalyst.streaming.InternalOutputModes
+import org.apache.spark.sql.connector.catalog.{SupportsWrite, TableProvider}
+import org.apache.spark.sql.connector.catalog.TableCapability._
 import org.apache.spark.sql.execution.command.DDLUtils
 import org.apache.spark.sql.execution.datasources.DataSource
-import org.apache.spark.sql.execution.datasources.v2.DataSourceV2Utils
+import org.apache.spark.sql.execution.datasources.v2.{DataSourceV2Utils, FileDataSourceV2}
 import org.apache.spark.sql.execution.streaming._
-import org.apache.spark.sql.execution.streaming.continuous.ContinuousTrigger
 import org.apache.spark.sql.execution.streaming.sources._
-import org.apache.spark.sql.sources.v2.{SupportsWrite, TableProvider}
-import org.apache.spark.sql.sources.v2.TableCapability._
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 
 /**
@@ -161,8 +161,19 @@ final class DataStreamWriter[T] private[sql](ds: Dataset[T]) {
    *
    * You can set the following option(s):
    * <ul>
-   * <li>`timeZone` (default session local timezone): sets the string that indicates a timezone
-   * to be used to format timestamps in the JSON/CSV datasources or partition values.</li>
+   * <li>`timeZone` (default session local timezone): sets the string that indicates a time zone ID
+   * to be used to format timestamps in the JSON/CSV datasources or partition values. The following
+   * formats of `timeZone` are supported:
+   *   <ul>
+   *     <li> Region-based zone ID: It should have the form 'area/city', such as
+   *         'America/Los_Angeles'.</li>
+   *     <li> Zone offset: It should be in the format '(+|-)HH:mm', for example '-08:00'
+   *          or '+01:00'. Also 'UTC' and 'Z' are supported as aliases of '+00:00'.</li>
+   *   </ul>
+   * Other short names like 'CST' are not recommended to use because they can be ambiguous.
+   * If it isn't set, the current value of the SQL config `spark.sql.session.timeZone` is
+   * used by default.
+   * </li>
    * </ul>
    *
    * @since 2.0.0
@@ -198,8 +209,19 @@ final class DataStreamWriter[T] private[sql](ds: Dataset[T]) {
    *
    * You can set the following option(s):
    * <ul>
-   * <li>`timeZone` (default session local timezone): sets the string that indicates a timezone
-   * to be used to format timestamps in the JSON/CSV datasources or partition values.</li>
+   * <li>`timeZone` (default session local timezone): sets the string that indicates a time zone ID
+   * to be used to format timestamps in the JSON/CSV datasources or partition values. The following
+   * formats of `timeZone` are supported:
+   *   <ul>
+   *     <li> Region-based zone ID: It should have the form 'area/city', such as
+   *         'America/Los_Angeles'.</li>
+   *     <li> Zone offset: It should be in the format '(+|-)HH:mm', for example '-08:00'
+   *          or '+01:00'. Also 'UTC' and 'Z' are supported as aliases of '+00:00'.</li>
+   *   </ul>
+   * Other short names like 'CST' are not recommended to use because they can be ambiguous.
+   * If it isn't set, the current value of the SQL config `spark.sql.session.timeZone` is
+   * used by default.
+   * </li>
    * </ul>
    *
    * @since 2.0.0
@@ -214,8 +236,19 @@ final class DataStreamWriter[T] private[sql](ds: Dataset[T]) {
    *
    * You can set the following option(s):
    * <ul>
-   * <li>`timeZone` (default session local timezone): sets the string that indicates a timezone
-   * to be used to format timestamps in the JSON/CSV datasources or partition values.</li>
+   * <li>`timeZone` (default session local timezone): sets the string that indicates a time zone ID
+   * to be used to format timestamps in the JSON/CSV datasources or partition values. The following
+   * formats of `timeZone` are supported:
+   *   <ul>
+   *     <li> Region-based zone ID: It should have the form 'area/city', such as
+   *         'America/Los_Angeles'.</li>
+   *     <li> Zone offset: It should be in the format '(+|-)HH:mm', for example '-08:00'
+   *          or '+01:00'. Also 'UTC' and 'Z' are supported as aliases of '+00:00'.</li>
+   *   </ul>
+   * Other short names like 'CST' are not recommended to use because they can be ambiguous.
+   * If it isn't set, the current value of the SQL config `spark.sql.session.timeZone` is
+   * used by default.
+   * </li>
    * </ul>
    *
    * @since 2.0.0
@@ -239,10 +272,18 @@ final class DataStreamWriter[T] private[sql](ds: Dataset[T]) {
   /**
    * Starts the execution of the streaming query, which will continually output results to the given
    * path as new data arrives. The returned [[StreamingQuery]] object can be used to interact with
-   * the stream.
+   * the stream. Throws a `TimeoutException` if the following conditions are met:
+   *  - Another run of the same streaming query, that is a streaming query
+   *    sharing the same checkpoint location, is already active on the same
+   *    Spark Driver
+   *  - The SQL configuration `spark.sql.streaming.stopActiveRunOnRestart`
+   *    is enabled
+   *  - The active run cannot be stopped within the timeout controlled by
+   *    the SQL configuration `spark.sql.streaming.stopTimeout`
    *
    * @since 2.0.0
    */
+  @throws[TimeoutException]
   def start(): StreamingQuery = {
     if (source.toLowerCase(Locale.ROOT) == DDLUtils.HIVE_PROVIDER) {
       throw new AnalysisException("Hive data source can only be used with tables, you can not " +
@@ -254,16 +295,8 @@ final class DataStreamWriter[T] private[sql](ds: Dataset[T]) {
       if (extraOptions.get("queryName").isEmpty) {
         throw new AnalysisException("queryName must be specified for memory sink")
       }
-      val (sink, resultDf) = trigger match {
-        case _: ContinuousTrigger =>
-          val s = new MemorySinkV2()
-          val r = Dataset.ofRows(df.sparkSession, new MemoryPlanV2(s, df.schema.toAttributes))
-          (s, r)
-        case _ =>
-          val s = new MemorySink(df.schema, outputMode)
-          val r = Dataset.ofRows(df.sparkSession, new MemoryPlan(s))
-          (s, r)
-      }
+      val sink = new MemorySink()
+      val resultDf = Dataset.ofRows(df.sparkSession, new MemoryPlan(sink, df.schema.toAttributes))
       val chkpointLoc = extraOptions.get("checkpointLocation")
       val recoverFromChkpoint = outputMode == OutputMode.Complete()
       val query = df.sparkSession.sessionState.streamingQueryManager.startQuery(
@@ -308,7 +341,9 @@ final class DataStreamWriter[T] private[sql](ds: Dataset[T]) {
     } else {
       val cls = DataSource.lookupDataSource(source, df.sparkSession.sessionState.conf)
       val disabledSources = df.sparkSession.sqlContext.conf.disabledV2StreamingWriters.split(",")
-      val useV1Source = disabledSources.contains(cls.getCanonicalName)
+      val useV1Source = disabledSources.contains(cls.getCanonicalName) ||
+        // file source v2 does not support streaming yet.
+        classOf[FileDataSourceV2].isAssignableFrom(cls)
 
       val sink = if (classOf[TableProvider].isAssignableFrom(cls) && !useV1Source) {
         val provider = cls.getConstructor().newInstance().asInstanceOf[TableProvider]
@@ -316,10 +351,12 @@ final class DataStreamWriter[T] private[sql](ds: Dataset[T]) {
           source = provider, conf = df.sparkSession.sessionState.conf)
         val options = sessionOptions ++ extraOptions
         val dsOptions = new CaseInsensitiveStringMap(options.asJava)
+        val table = DataSourceV2Utils.getTableFromProvider(
+          provider, dsOptions, userSpecifiedSchema = None)
         import org.apache.spark.sql.execution.datasources.v2.DataSourceV2Implicits._
-        provider.getTable(dsOptions) match {
+        table match {
           case table: SupportsWrite if table.supports(STREAMING_WRITE) =>
-            table.asInstanceOf[BaseStreamingSink]
+            table
           case _ => createV1Sink()
         }
       } else {
@@ -339,7 +376,7 @@ final class DataStreamWriter[T] private[sql](ds: Dataset[T]) {
     }
   }
 
-  private def createV1Sink(): BaseStreamingSink = {
+  private def createV1Sink(): Sink = {
     val ds = DataSource(
       df.sparkSession,
       className = source,

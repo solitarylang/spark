@@ -20,10 +20,10 @@ license: |
   limitations under the License.
 ---
 
-Apache Spark is a fast and general-purpose cluster computing system.
+Apache Spark is a unified analytics engine for large-scale data processing.
 It provides high-level APIs in Java, Scala, Python and R,
 and an optimized engine that supports general execution graphs.
-It also supports a rich set of higher-level tools including [Spark SQL](sql-programming-guide.html) for SQL and structured data processing, [MLlib](ml-guide.html) for machine learning, [GraphX](graphx-programming-guide.html) for graph processing, and [Spark Streaming](streaming-programming-guide.html).
+It also supports a rich set of higher-level tools including [Spark SQL](sql-programming-guide.html) for SQL and structured data processing, [MLlib](ml-guide.html) for machine learning, [GraphX](graphx-programming-guide.html) for graph processing, and [Structured Streaming](structured-streaming-programming-guide.html) for incremental computation and stream processing.
 
 # Security
 
@@ -42,15 +42,17 @@ If you'd like to build Spark from
 source, visit [Building Spark](building-spark.html).
 
 
-Spark runs on both Windows and UNIX-like systems (e.g. Linux, Mac OS). It's easy to run
-locally on one machine --- all you need is to have `java` installed on your system `PATH`,
-or the `JAVA_HOME` environment variable pointing to a Java installation.
+Spark runs on both Windows and UNIX-like systems (e.g. Linux, Mac OS), and it should run on any platform that runs a supported version of Java. This should include JVMs on x86_64 and ARM64. It's easy to run locally on one machine --- all you need is to have `java` installed on your system `PATH`, or the `JAVA_HOME` environment variable pointing to a Java installation.
 
-Spark runs on Java 8+, Scala 2.12, Python 2.7+/3.4+ and R 3.1+.
+Spark runs on Java 8/11, Scala 2.12, Python 2.7+/3.4+ and R 3.1+.
+Java 8 prior to version 8u92 support is deprecated as of Spark 3.0.0.
+Python 2 and Python 3 prior to version 3.6 support is deprecated as of Spark 3.0.0.
 R prior to version 3.4 support is deprecated as of Spark 3.0.0.
 For the Scala API, Spark {{site.SPARK_VERSION}}
 uses Scala {{site.SCALA_BINARY_VERSION}}. You will need to use a compatible Scala version
 ({{site.SCALA_BINARY_VERSION}}.x).
+
+For Java 11, `-Dio.netty.tryReflectionSetAccessible=true` is required additionally for Apache Arrow library. This prevents `java.lang.UnsupportedOperationException: sun.misc.Unsafe or java.nio.DirectByteBuffer.(long, int) not available` when Apache Arrow uses Netty internally.
 
 # Running the Examples and Shell
 
@@ -116,7 +118,7 @@ options for deployment:
 
 **API Docs:**
 
-* [Spark Scala API (Scaladoc)](api/scala/index.html#org.apache.spark.package)
+* [Spark Scala API (Scaladoc)](api/scala/org/apache/spark/index.html)
 * [Spark Java API (Javadoc)](api/java/index.html)
 * [Spark Python API (Sphinx)](api/python/index.html)
 * [Spark R API (Roxygen2)](api/R/index.html)
@@ -145,6 +147,7 @@ options for deployment:
 * Integration with other storage systems:
   * [Cloud Infrastructures](cloud-integration.html)
   * [OpenStack Swift](storage-openstack-swift.html)
+* [Migration Guide](migration-guide.html): Migration guides for Spark components
 * [Building Spark](building-spark.html): build Spark using the Maven system
 * [Contributing to Spark](https://spark.apache.org/contributing.html)
 * [Third Party Projects](https://spark.apache.org/third-party-projects.html): related third party Spark projects

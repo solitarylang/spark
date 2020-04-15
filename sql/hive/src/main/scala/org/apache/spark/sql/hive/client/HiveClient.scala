@@ -61,6 +61,15 @@ private[hive] trait HiveClient {
   /** Returns the names of tables in the given database that matches the given pattern. */
   def listTables(dbName: String, pattern: String): Seq[String]
 
+  /**
+   * Returns the names of tables with specific tableType in the given database that matches
+   * the given pattern.
+   */
+  def listTablesByType(
+      dbName: String,
+      pattern: String,
+      tableType: CatalogTableType): Seq[String]
+
   /** Sets the name of current database. */
   def setCurrentDatabase(databaseName: String): Unit
 
@@ -83,6 +92,9 @@ private[hive] trait HiveClient {
 
   /** Returns the metadata for the specified table or None if it doesn't exist. */
   def getTableOption(dbName: String, tableName: String): Option[CatalogTable]
+
+  /** Returns metadata of existing permanent tables/views for given names. */
+  def getTablesByName(dbName: String, tableNames: Seq[String]): Seq[CatalogTable]
 
   /** Creates a table with the given metadata. */
   def createTable(table: CatalogTable, ignoreIfExists: Boolean): Unit
@@ -108,8 +120,8 @@ private[hive] trait HiveClient {
    * TODO(cloud-fan): it's a little hacky to introduce the schema table properties here in
    * `HiveClient`, but we don't have a cleaner solution now.
    */
-  def alterTableDataSchema(
-    dbName: String, tableName: String, newDataSchema: StructType, schemaProps: Map[String, String])
+  def alterTableDataSchema(dbName: String, tableName: String, newDataSchema: StructType,
+    schemaProps: Map[String, String]): Unit
 
   /** Creates a new database with the given name. */
   def createDatabase(database: CatalogDatabase, ignoreIfExists: Boolean): Unit
@@ -289,4 +301,6 @@ private[hive] trait HiveClient {
   /** Used for testing only.  Removes all metadata from this instance of Hive. */
   def reset(): Unit
 
+  /** Returns the user name which is used as owner for Hive table. */
+  def userName: String
 }

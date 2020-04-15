@@ -26,7 +26,7 @@ function drawApplicationTimeline(groupArray, eventObjArray, startTime, offset) {
     editable: false,
     align: 'left',
     showCurrentTime: false,
-    min: startTime,
+    start: startTime,
     zoomable: false,
     moment: function (date) {
       return vis.moment(date).utcOffset(offset);
@@ -50,7 +50,7 @@ function drawApplicationTimeline(groupArray, eventObjArray, startTime, offset) {
       };
 
       $(this).click(function() {
-        var jobPagePath = $(getSelectorForJobEntry(this)).find("a.name-link").attr("href")
+        var jobPagePath = $(getSelectorForJobEntry(this)).find("a.name-link").attr("href");
           window.location.href = jobPagePath
       });
 
@@ -75,6 +75,9 @@ function drawApplicationTimeline(groupArray, eventObjArray, startTime, offset) {
 
     $("#application-timeline").toggleClass('collapsed');
 
+    var visibilityState = status ? "" : "none";
+    $("#application-timeline").css("display", visibilityState);
+
     // Switch the class of the arrow from open to closed.
     $(this).find('.expand-application-timeline-arrow').toggleClass('arrow-open');
     $(this).find('.expand-application-timeline-arrow').toggleClass('arrow-closed');
@@ -83,11 +86,14 @@ function drawApplicationTimeline(groupArray, eventObjArray, startTime, offset) {
   });
 }
 
-$(function (){
-  if (window.localStorage.getItem("expand-application-timeline") == "true") {
+$(function () {
+  if ($("span.expand-application-timeline").length &&
+      window.localStorage.getItem("expand-application-timeline") == "true") {
     // Set it to false so that the click function can revert it
     window.localStorage.setItem("expand-application-timeline", "false");
     $("span.expand-application-timeline").trigger('click');
+  } else {
+    $("#application-timeline").css("display", "none");
   }
 });
 
@@ -102,7 +108,7 @@ function drawJobTimeline(groupArray, eventObjArray, startTime, offset) {
     editable: false,
     align: 'left',
     showCurrentTime: false,
-    min: startTime,
+    start: startTime,
     zoomable: false,
     moment: function (date) {
       return vis.moment(date).utcOffset(offset);
@@ -151,6 +157,9 @@ function drawJobTimeline(groupArray, eventObjArray, startTime, offset) {
 
     $("#job-timeline").toggleClass('collapsed');
 
+    var visibilityState = status ? "" : "none";
+    $("#job-timeline").css("display", visibilityState);
+
     // Switch the class of the arrow from open to closed.
     $(this).find('.expand-job-timeline-arrow').toggleClass('arrow-open');
     $(this).find('.expand-job-timeline-arrow').toggleClass('arrow-closed');
@@ -159,18 +168,21 @@ function drawJobTimeline(groupArray, eventObjArray, startTime, offset) {
   });
 }
 
-$(function (){
-  if (window.localStorage.getItem("expand-job-timeline") == "true") {
+$(function () {
+  if ($("span.expand-job-timeline").length &&
+      window.localStorage.getItem("expand-job-timeline") == "true") {
     // Set it to false so that the click function can revert it
     window.localStorage.setItem("expand-job-timeline", "false");
     $("span.expand-job-timeline").trigger('click');
+  } else {
+    $("#job-timeline").css("display", "none");
   }
 });
 
 function drawTaskAssignmentTimeline(groupArray, eventObjArray, minLaunchTime, maxFinishTime, offset) {
   var groups = new vis.DataSet(groupArray);
   var items = new vis.DataSet(eventObjArray);
-  var container = $("#task-assignment-timeline")[0]
+  var container = $("#task-assignment-timeline")[0];
   var options = {
     groupOrder: function(a, b) {
       return a.value - b.value
@@ -179,15 +191,15 @@ function drawTaskAssignmentTimeline(groupArray, eventObjArray, minLaunchTime, ma
     align: 'left',
     selectable: false,
     showCurrentTime: false,
-    min: minLaunchTime,
-    max: maxFinishTime,
+    start: minLaunchTime,
+    end: maxFinishTime,
     zoomable: false,
     moment: function (date) {
       return vis.moment(date).utcOffset(offset);
     }
   };
 
-  var taskTimeline = new vis.Timeline(container)
+  var taskTimeline = new vis.Timeline(container);
   taskTimeline.setOptions(options);
   taskTimeline.setGroups(groups);
   taskTimeline.setItems(items);
@@ -218,6 +230,9 @@ function drawTaskAssignmentTimeline(groupArray, eventObjArray, minLaunchTime, ma
 
     $("#task-assignment-timeline").toggleClass("collapsed");
 
+    var visibilityState = status ? "" : "none";
+    $("#task-assignment-timeline").css("display", visibilityState);
+
      // Switch the class of the arrow from open to closed.
     $(this).find(".expand-task-assignment-timeline-arrow").toggleClass("arrow-open");
     $(this).find(".expand-task-assignment-timeline-arrow").toggleClass("arrow-closed");
@@ -226,11 +241,14 @@ function drawTaskAssignmentTimeline(groupArray, eventObjArray, minLaunchTime, ma
   });
 }
 
-$(function (){
-  if (window.localStorage.getItem("expand-task-assignment-timeline") == "true") {
+$(function () {
+  if ($("span.expand-task-assignment-timeline").length &&
+      window.localStorage.getItem("expand-task-assignment-timeline") == "true") {
     // Set it to false so that the click function can revert it
     window.localStorage.setItem("expand-task-assignment-timeline", "false");
     $("span.expand-task-assignment-timeline").trigger('click');
+  } else {
+    $("#task-assignment-timeline").css("display", "none");
   }
 });
 

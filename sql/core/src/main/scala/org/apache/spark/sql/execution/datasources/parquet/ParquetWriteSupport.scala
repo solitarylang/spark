@@ -35,6 +35,7 @@ import org.apache.spark.sql.SPARK_VERSION_METADATA_KEY
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.SpecializedGetters
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
+import org.apache.spark.sql.catalyst.util.RebaseDateTime._
 import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types._
 
@@ -49,7 +50,7 @@ import org.apache.spark.sql.types._
  * of this option is propagated to this class by the `init()` method and its Hadoop configuration
  * argument.
  */
-private[parquet] class ParquetWriteSupport extends WriteSupport[InternalRow] with Logging {
+class ParquetWriteSupport extends WriteSupport[InternalRow] with Logging {
   // A `ValueWriter` is responsible for writing a field of an `InternalRow` to the record consumer.
   // Here we are using `SpecializedGetters` rather than `InternalRow` so that we can directly access
   // data in `ArrayData` without the help of `SpecificMutableRow`.
@@ -76,6 +77,10 @@ private[parquet] class ParquetWriteSupport extends WriteSupport[InternalRow] wit
   // Reusable byte array used to write decimal values
   private val decimalBuffer =
     new Array[Byte](Decimal.minBytesForPrecision(DecimalType.MAX_PRECISION))
+
+  // Whether to rebase datetimes from Gregorian to Julian calendar in write
+  private val rebaseDateTime: Boolean =
+    SQLConf.get.getConf(SQLConf.LEGACY_PARQUET_REBASE_DATETIME_IN_WRITE)
 
   override def init(configuration: Configuration): WriteContext = {
     val schemaString = configuration.get(ParquetWriteSupport.SPARK_ROW_SCHEMA)
@@ -147,6 +152,11 @@ private[parquet] class ParquetWriteSupport extends WriteSupport[InternalRow] wit
         (row: SpecializedGetters, ordinal: Int) =>
           recordConsumer.addInteger(row.getShort(ordinal))
 
+      case DateType if rebaseDateTime =>
+        (row: SpecializedGetters, ordinal: Int) =>
+          val rebasedDays = rebaseGregorianToJulianDays(row.getInt(ordinal))
+          recordConsumer.addInteger(rebasedDays)
+
       case IntegerType | DateType =>
         (row: SpecializedGetters, ordinal: Int) =>
           recordConsumer.addInteger(row.getInt(ordinal))
@@ -177,13 +187,24 @@ private[parquet] class ParquetWriteSupport extends WriteSupport[InternalRow] wit
               buf.order(ByteOrder.LITTLE_ENDIAN).putLong(timeOfDayNanos).putInt(julianDay)
               recordConsumer.addBinary(Binary.fromReusedByteArray(timestampBuffer))
 
+          case SQLConf.ParquetOutputTimestampType.TIMESTAMP_MICROS if rebaseDateTime =>
+            (row: SpecializedGetters, ordinal: Int) =>
+              val rebasedMicros = rebaseGregorianToJulianMicros(row.getLong(ordinal))
+              recordConsumer.addLong(rebasedMicros)
+
           case SQLConf.ParquetOutputTimestampType.TIMESTAMP_MICROS =>
             (row: SpecializedGetters, ordinal: Int) =>
               recordConsumer.addLong(row.getLong(ordinal))
 
+          case SQLConf.ParquetOutputTimestampType.TIMESTAMP_MILLIS if rebaseDateTime =>
+            (row: SpecializedGetters, ordinal: Int) =>
+              val rebasedMicros = rebaseGregorianToJulianMicros(row.getLong(ordinal))
+              val millis = DateTimeUtils.microsToMillis(rebasedMicros)
+              recordConsumer.addLong(millis)
+
           case SQLConf.ParquetOutputTimestampType.TIMESTAMP_MILLIS =>
             (row: SpecializedGetters, ordinal: Int) =>
-              val millis = DateTimeUtils.toMillis(row.getLong(ordinal))
+              val millis = DateTimeUtils.microsToMillis(row.getLong(ordinal))
               recordConsumer.addLong(millis)
         }
 
@@ -442,7 +463,7 @@ private[parquet] class ParquetWriteSupport extends WriteSupport[InternalRow] wit
   }
 }
 
-private[parquet] object ParquetWriteSupport {
+object ParquetWriteSupport {
   val SPARK_ROW_SCHEMA: String = "org.apache.spark.sql.parquet.row.attributes"
 
   def setSchema(schema: StructType, configuration: Configuration): Unit = {

@@ -17,18 +17,18 @@
 
 package org.apache.spark.sql
 
-import scala.collection.mutable.ArrayBuffer
+import org.apache.log4j.Level
 
-import org.apache.log4j.{AppenderSkeleton, Level}
-import org.apache.log4j.spi.LoggingEvent
-
+import org.apache.spark.sql.catalyst.optimizer.EliminateResolvedHint
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.catalyst.plans.logical._
+import org.apache.spark.sql.catalyst.rules.RuleExecutor
+import org.apache.spark.sql.execution.adaptive.AdaptiveSparkPlanHelper
 import org.apache.spark.sql.execution.joins._
 import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.test.SharedSQLContext
+import org.apache.spark.sql.test.SharedSparkSession
 
-class JoinHintSuite extends PlanTest with SharedSQLContext {
+class JoinHintSuite extends PlanTest with SharedSparkSession with AdaptiveSparkPlanHelper {
   import testImplicits._
 
   lazy val df = spark.range(10)
@@ -36,28 +36,20 @@ class JoinHintSuite extends PlanTest with SharedSQLContext {
   lazy val df2 = df.selectExpr("id as b1", "id as b2")
   lazy val df3 = df.selectExpr("id as c1", "id as c2")
 
-  class MockAppender extends AppenderSkeleton {
-    val loggingEvents = new ArrayBuffer[LoggingEvent]()
-
-    override def append(loggingEvent: LoggingEvent): Unit = loggingEvents.append(loggingEvent)
-    override def close(): Unit = {}
-    override def requiresLayout(): Boolean = false
-  }
-
   def msgNoHintRelationFound(relation: String, hint: String): String =
-    s"Count not find relation '$relation' for join strategy hint '$hint'."
+    s"Count not find relation '$relation' specified in hint '$hint'."
 
   def msgNoJoinForJoinHint(strategy: String): String =
     s"A join hint (strategy=$strategy) is specified but it is not part of a join relation."
 
   def msgJoinHintOverridden(strategy: String): String =
-    s"Join hint (strategy=$strategy) is overridden by another hint and will not take effect."
+    s"Hint (strategy=$strategy) is overridden by another hint and will not take effect."
 
   def verifyJoinHintWithWarnings(
       df: => DataFrame,
       expectedHints: Seq[JoinHint],
       warnings: Seq[String]): Unit = {
-    val logAppender = new MockAppender()
+    val logAppender = new LogAppender("join hints")
     withLogAppender(logAppender) {
       verifyJoinHint(df, expectedHints)
     }
@@ -97,7 +89,7 @@ class JoinHintSuite extends PlanTest with SharedSQLContext {
 
   test("multiple joins") {
     verifyJoinHint(
-      df1.join(df2.hint("broadcast").join(df3, 'b1 === 'c1).hint("broadcast"), 'a1 === 'c1),
+      df1.join(df2.hint("broadcast").join(df3, $"b1" === $"c1").hint("broadcast"), $"a1" === $"c1"),
       JoinHint(
         None,
         Some(HintInfo(strategy = Some(BROADCAST)))) ::
@@ -106,7 +98,7 @@ class JoinHintSuite extends PlanTest with SharedSQLContext {
           None) :: Nil
     )
     verifyJoinHint(
-      df1.hint("broadcast").join(df2, 'a1 === 'b1).hint("broadcast").join(df3, 'a1 === 'c1),
+      df1.hint("broadcast").join(df2, $"a1" === $"b1").hint("broadcast").join(df3, $"a1" === $"c1"),
       JoinHint(
         Some(HintInfo(strategy = Some(BROADCAST))),
         None) ::
@@ -178,8 +170,8 @@ class JoinHintSuite extends PlanTest with SharedSQLContext {
         )
 
         verifyJoinHint(
-          df1.join(df2, 'a1 === 'b1 && 'a1 > 5).hint("broadcast")
-            .join(df3, 'b1 === 'c1 && 'a1 < 10),
+          df1.join(df2, $"a1" === $"b1" && $"a1" > 5).hint("broadcast")
+            .join(df3, $"b1" === $"c1" && $"a1" < 10),
           JoinHint(
             Some(HintInfo(strategy = Some(BROADCAST))),
             None) ::
@@ -187,9 +179,9 @@ class JoinHintSuite extends PlanTest with SharedSQLContext {
         )
 
         verifyJoinHint(
-          df1.join(df2, 'a1 === 'b1 && 'a1 > 5).hint("broadcast")
-            .join(df3, 'b1 === 'c1 && 'a1 < 10)
-            .join(df, 'b1 === 'id),
+          df1.join(df2, $"a1" === $"b1" && $"a1" > 5).hint("broadcast")
+            .join(df3, $"b1" === $"c1" && $"a1" < 10)
+            .join(df, $"b1" === $"id"),
           JoinHint.NONE ::
             JoinHint(
               Some(HintInfo(strategy = Some(BROADCAST))),
@@ -220,7 +212,7 @@ class JoinHintSuite extends PlanTest with SharedSQLContext {
 
   test("hint merge") {
     verifyJoinHintWithWarnings(
-      df.hint("broadcast").filter('id > 2).hint("broadcast").join(df, "id"),
+      df.hint("broadcast").filter($"id" > 2).hint("broadcast").join(df, "id"),
       JoinHint(
         Some(HintInfo(strategy = Some(BROADCAST))),
         None) :: Nil,
@@ -234,7 +226,7 @@ class JoinHintSuite extends PlanTest with SharedSQLContext {
       Nil
     )
     verifyJoinHintWithWarnings(
-      df.hint("merge").filter('id > 2).hint("shuffle_hash").join(df, "id").hint("broadcast"),
+      df.hint("merge").filter($"id" > 2).hint("shuffle_hash").join(df, "id").hint("broadcast"),
       JoinHint(
         Some(HintInfo(strategy = Some(SHUFFLE_HASH))),
         None) :: Nil,
@@ -310,13 +302,13 @@ class JoinHintSuite extends PlanTest with SharedSQLContext {
 
   test("nested hint") {
     verifyJoinHint(
-      df.hint("broadcast").hint("broadcast").filter('id > 2).join(df, "id"),
+      df.hint("broadcast").hint("broadcast").filter($"id" > 2).join(df, "id"),
       JoinHint(
         Some(HintInfo(strategy = Some(BROADCAST))),
         None) :: Nil
     )
     verifyJoinHint(
-      df.hint("shuffle_hash").hint("broadcast").hint("merge").filter('id > 2).join(df, "id"),
+      df.hint("shuffle_hash").hint("broadcast").hint("merge").filter($"id" > 2).join(df, "id"),
       JoinHint(
         Some(HintInfo(strategy = Some(SHUFFLE_MERGE))),
         None) :: Nil
@@ -350,7 +342,7 @@ class JoinHintSuite extends PlanTest with SharedSQLContext {
 
   private def assertBroadcastHashJoin(df: DataFrame, buildSide: BuildSide): Unit = {
     val executedPlan = df.queryExecution.executedPlan
-    val broadcastHashJoins = executedPlan.collect {
+    val broadcastHashJoins = collect(executedPlan) {
       case b: BroadcastHashJoinExec => b
     }
     assert(broadcastHashJoins.size == 1)
@@ -359,7 +351,7 @@ class JoinHintSuite extends PlanTest with SharedSQLContext {
 
   private def assertBroadcastNLJoin(df: DataFrame, buildSide: BuildSide): Unit = {
     val executedPlan = df.queryExecution.executedPlan
-    val broadcastNLJoins = executedPlan.collect {
+    val broadcastNLJoins = collect(executedPlan) {
       case b: BroadcastNestedLoopJoinExec => b
     }
     assert(broadcastNLJoins.size == 1)
@@ -368,7 +360,7 @@ class JoinHintSuite extends PlanTest with SharedSQLContext {
 
   private def assertShuffleHashJoin(df: DataFrame, buildSide: BuildSide): Unit = {
     val executedPlan = df.queryExecution.executedPlan
-    val shuffleHashJoins = executedPlan.collect {
+    val shuffleHashJoins = collect(executedPlan) {
       case s: ShuffledHashJoinExec => s
     }
     assert(shuffleHashJoins.size == 1)
@@ -377,7 +369,7 @@ class JoinHintSuite extends PlanTest with SharedSQLContext {
 
   private def assertShuffleMergeJoin(df: DataFrame): Unit = {
     val executedPlan = df.queryExecution.executedPlan
-    val shuffleMergeJoins = executedPlan.collect {
+    val shuffleMergeJoins = collect(executedPlan) {
       case s: SortMergeJoinExec => s
     }
     assert(shuffleMergeJoins.size == 1)
@@ -385,7 +377,7 @@ class JoinHintSuite extends PlanTest with SharedSQLContext {
 
   private def assertShuffleReplicateNLJoin(df: DataFrame): Unit = {
     val executedPlan = df.queryExecution.executedPlan
-    val shuffleReplicateNLJoins = executedPlan.collect {
+    val shuffleReplicateNLJoins = collect(executedPlan) {
       case c: CartesianProductExec => c
     }
     assert(shuffleReplicateNLJoins.size == 1)
@@ -555,6 +547,27 @@ class JoinHintSuite extends PlanTest with SharedSQLContext {
         assertBroadcastNLJoin(
           sql(nonEquiJoinQueryWithHint("SHUFFLE_REPLICATE_NL(t1, t2)" :: Nil, "right")), BuildLeft)
       }
+    }
+  }
+
+  test("Verify that the EliminatedResolvedHint rule is idempotent") {
+    withTempView("t1", "t2") {
+      Seq((1, "4"), (2, "2")).toDF("key", "value").createTempView("t1")
+      Seq((1, "1"), (2, "12.3"), (2, "123")).toDF("key", "value").createTempView("t2")
+      val df = sql("SELECT /*+ broadcast(t2) */ * from t1 join t2 ON t1.key = t2.key")
+      val optimize = new RuleExecutor[LogicalPlan] {
+        val batches = Batch("EliminateResolvedHint", FixedPoint(10), EliminateResolvedHint) :: Nil
+      }
+      val optimized = optimize.execute(df.logicalPlan)
+      val expectedHints =
+        JoinHint(
+          None,
+          Some(HintInfo(strategy = Some(BROADCAST)))) :: Nil
+      val joinHints = optimized collect {
+        case Join(_, _, _, _, hint) => hint
+        case _: ResolvedHint => fail("ResolvedHint should not appear after optimize.")
+      }
+      assert(joinHints == expectedHints)
     }
   }
 }

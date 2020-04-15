@@ -17,8 +17,6 @@
 
 package org.apache.spark.sql.streaming
 
-import java.lang.Thread.UncaughtExceptionHandler
-
 import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import scala.language.experimental.macros
@@ -39,13 +37,14 @@ import org.apache.spark.sql.catalyst.encoders.{encoderFor, ExpressionEncoder, Ro
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.catalyst.plans.physical.AllTuples
 import org.apache.spark.sql.catalyst.util._
+import org.apache.spark.sql.connector.read.streaming.{Offset => OffsetV2, SparkDataStream}
 import org.apache.spark.sql.execution.datasources.v2.StreamingDataSourceV2Relation
 import org.apache.spark.sql.execution.streaming._
 import org.apache.spark.sql.execution.streaming.continuous.{ContinuousExecution, EpochCoordinatorRef, IncrementAndGetEpoch}
-import org.apache.spark.sql.execution.streaming.sources.MemorySinkV2
+import org.apache.spark.sql.execution.streaming.sources.MemorySink
 import org.apache.spark.sql.execution.streaming.state.StateStore
 import org.apache.spark.sql.streaming.StreamingQueryListener._
-import org.apache.spark.sql.test.SharedSQLContext
+import org.apache.spark.sql.test.SharedSparkSession
 import org.apache.spark.util.{Clock, SystemClock, Utils}
 
 /**
@@ -72,7 +71,7 @@ import org.apache.spark.util.{Clock, SystemClock, Utils}
  * avoid hanging forever in the case of failures. However, individual suites can change this
  * by overriding `streamingTimeout`.
  */
-trait StreamTest extends QueryTest with SharedSQLContext with TimeLimits with BeforeAndAfterAll {
+trait StreamTest extends QueryTest with SharedSparkSession with TimeLimits with BeforeAndAfterAll {
 
   // Necessary to make ScalaTest 3.x interrupt a thread on the JVM like ScalaTest 2.2.x
   implicit val defaultSignaler: Signaler = ThreadSignaler
@@ -86,7 +85,6 @@ trait StreamTest extends QueryTest with SharedSQLContext with TimeLimits with Be
   }
 
   protected val defaultTrigger = Trigger.ProcessingTime(0)
-  protected val defaultUseV2Sink = false
 
   /** How long to wait for an active stream to catch up when checking a result. */
   val streamingTimeout = 60.seconds
@@ -114,7 +112,11 @@ trait StreamTest extends QueryTest with SharedSQLContext with TimeLimits with Be
   object MultiAddData {
     def apply[A]
       (source1: MemoryStream[A], data1: A*)(source2: MemoryStream[A], data2: A*): StreamAction = {
-      val actions = Seq(AddDataMemory(source1, data1), AddDataMemory(source2, data2))
+      apply((source1, data1), (source2, data2))
+    }
+
+    def apply[A](inputs: (MemoryStream[A], Seq[A])*): StreamAction = {
+      val actions = inputs.map { case (source, data) => AddDataMemory(source, data) }
       StreamProgressLockedActions(actions, desc = actions.mkString("[ ", " | ", " ]"))
     }
   }
@@ -126,7 +128,7 @@ trait StreamTest extends QueryTest with SharedSQLContext with TimeLimits with Be
      * the active query, and then return the source object the data was added, as well as the
      * offset of added data.
      */
-    def addData(query: Option[StreamExecution]): (BaseStreamingSource, Offset)
+    def addData(query: Option[StreamExecution]): (SparkDataStream, OffsetV2)
   }
 
   /** A trait that can be extended when testing a source. */
@@ -137,7 +139,7 @@ trait StreamTest extends QueryTest with SharedSQLContext with TimeLimits with Be
   case class AddDataMemory[A](source: MemoryStreamBase[A], data: Seq[A]) extends AddData {
     override def toString: String = s"AddData to $source: ${data.mkString(",")}"
 
-    override def addData(query: Option[StreamExecution]): (BaseStreamingSource, Offset) = {
+    override def addData(query: Option[StreamExecution]): (SparkDataStream, OffsetV2) = {
       (source, source.addData(data))
     }
   }
@@ -327,8 +329,7 @@ trait StreamTest extends QueryTest with SharedSQLContext with TimeLimits with Be
    */
   def testStream(
       _stream: Dataset[_],
-      outputMode: OutputMode = OutputMode.Append,
-      useV2Sink: Boolean = defaultUseV2Sink)(actions: StreamAction*): Unit = synchronized {
+      outputMode: OutputMode = OutputMode.Append)(actions: StreamAction*): Unit = synchronized {
     import org.apache.spark.sql.streaming.util.StreamManualClock
 
     // `synchronized` is added to prevent the user from calling multiple `testStream`s concurrently
@@ -340,8 +341,8 @@ trait StreamTest extends QueryTest with SharedSQLContext with TimeLimits with Be
     var pos = 0
     var currentStream: StreamExecution = null
     var lastStream: StreamExecution = null
-    val awaiting = new mutable.HashMap[Int, Offset]() // source index -> offset to wait for
-    val sink = if (useV2Sink) new MemorySinkV2 else new MemorySink(stream.schema, outputMode)
+    val awaiting = new mutable.HashMap[Int, OffsetV2]() // source index -> offset to wait for
+    val sink = new MemorySink
     val resetConfValues = mutable.Map[String, Option[String]]()
     val defaultCheckpointLocation =
       Utils.createTempDir(namePrefix = "streaming.metadata").getCanonicalPath
@@ -391,10 +392,8 @@ trait StreamTest extends QueryTest with SharedSQLContext with TimeLimits with Be
       }
 
     def testState = {
-      val sinkDebugString = sink match {
-        case s: MemorySink => s.toDebugString
-        case s: MemorySinkV2 => s.toDebugString
-      }
+      val sinkDebugString = sink.toDebugString
+
       s"""
          |== Progress ==
          |$testActions

@@ -18,8 +18,7 @@
 package org.apache.spark.sql.execution.datasources.parquet
 
 import java.io.File
-
-import scala.language.existentials
+import java.time.ZoneOffset
 
 import org.apache.commons.io.FileUtils
 import org.apache.hadoop.fs.{FileSystem, Path, PathFilter}
@@ -30,9 +29,9 @@ import org.apache.parquet.schema.PrimitiveType.PrimitiveTypeName
 import org.apache.spark.sql.Row
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
 import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.test.SharedSQLContext
+import org.apache.spark.sql.test.SharedSparkSession
 
-class ParquetInteroperabilitySuite extends ParquetCompatibilityTest with SharedSQLContext {
+class ParquetInteroperabilitySuite extends ParquetCompatibilityTest with SharedSparkSession {
   test("parquet files with different physical schemas but share the same logical schema") {
     import ParquetCompatibilityTest._
 
@@ -147,8 +146,8 @@ class ParquetInteroperabilitySuite extends ParquetCompatibilityTest with SharedS
               impalaFileData.map { ts =>
                 DateTimeUtils.toJavaTimestamp(DateTimeUtils.convertTz(
                   DateTimeUtils.fromJavaTimestamp(ts),
-                  DateTimeUtils.TimeZoneUTC,
-                  DateTimeUtils.getTimeZone(conf.sessionLocalTimeZone)))
+                  ZoneOffset.UTC,
+                  DateTimeUtils.getZoneId(conf.sessionLocalTimeZone)))
               }
             }
             val fullExpectations = (ts ++ impalaExpectations).map(_.toString).sorted.toArray
@@ -186,12 +185,11 @@ class ParquetInteroperabilitySuite extends ParquetCompatibilityTest with SharedS
                 assert(typeName === PrimitiveTypeName.INT96)
                 val oneBlockMeta = oneFooter.getBlocks().get(0)
                 val oneBlockColumnMeta = oneBlockMeta.getColumns().get(0)
-                val columnStats = oneBlockColumnMeta.getStatistics
                 // This is the important assert.  Column stats are written, but they are ignored
                 // when the data is read back as mentioned above, b/c int96 is unsigned.  This
                 // assert makes sure this holds even if we change parquet versions (if eg. there
                 // were ever statistics even on unsigned columns).
-                assert(!columnStats.hasNonNullValue)
+                assert(!oneBlockColumnMeta.getStatistics.hasNonNullValue)
               }
 
               // These queries should return the entire dataset with the conversion applied,
